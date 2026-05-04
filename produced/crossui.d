@@ -67,6 +67,7 @@ extern(System) nothrow @nogc {
     void glPopMatrix();
     void glFinish();
     void glFlush();
+    void glReadPixels(GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,void*);
     const(GLubyte*) glGetString(GLenum);
 }
 
@@ -124,48 +125,33 @@ version (Windows) {
 
 bool platformInit(int w, int h, const(char)* title) {
     auto hInst = GetModuleHandleW(null);
-    WNDCLASSEXW wc;
-    wc.cbSize = WNDCLASSEXW.sizeof;
-    wc.style = CS_HREDRAW | CS_VREDRAW | CS_OWNDC;
-    wc.lpfnWndProc = &winProc;
-    wc.hInstance = hInst;
-    wc.hCursor = LoadCursorW(null, IDC_ARROW);
+    WNDCLASSEXW wc; wc.cbSize = wc.sizeof;
+    wc.style = 3 | 0x0020; wc.lpfnWndProc = &winProc; wc.hInstance = hInst;
+    wc.hCursor = LoadCursorW(null, cast(wchar*)32512);
     wc.lpszClassName = "CrossUIWnd"w.ptr;
     if (!RegisterClassExW(&wc)) return false;
 
-    RECT rc = RECT(0, 0, w, h);
-    AdjustWindowRectEx(&rc, WS_OVERLAPPEDWINDOW, FALSE, 0);
-
-    wchar[512] wt;
-    int ni = 0;
-    auto p = title;
-    while (*p && ni < 511) { wt[ni++] = cast(wchar)*p; p++; }
+    wchar[512] wt; int ni = 0;
+    auto p = title; while (*p && ni < 511) { wt[ni++] = cast(wchar)*p; p++; }
     wt[ni] = 0;
 
+    RECT rc = RECT(0, 0, w, h);
+    AdjustWindowRectEx(&rc, 0x00CF0000, 0, 0);
     g_win.hwnd = CreateWindowExW(0, "CrossUIWnd"w.ptr, wt.ptr,
-        WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
-        null, null, hInst, null);
+        0x00CF0000|0x10000000, 0x80000000,0x80000000,
+        rc.right-rc.left, rc.bottom-rc.top, null,null,hInst,null);
     if (!g_win.hwnd) return false;
+
     g_win.hdc = GetDC(g_win.hwnd);
-
-    PIXELFORMATDESCRIPTOR pfd;
-    pfd.nSize = pfd.sizeof;
-    pfd.nVersion = 1;
-    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
-    pfd.iPixelType = PFD_TYPE_RGBA;
-    pfd.cColorBits = 32;
-    pfd.cDepthBits = 16;
-    pfd.iLayerType = PFD_MAIN_PLANE;
-    int pf = ChoosePixelFormat(g_win.hdc, &pfd);
-    SetPixelFormat(g_win.hdc, pf, &pfd);
-
+    PIXELFORMATDESCRIPTOR pfd; pfd.nSize = pfd.sizeof; pfd.nVersion = 1;
+    pfd.dwFlags = 0x04|0x01|0x02; pfd.iPixelType = 0;
+    pfd.cColorBits = 32; pfd.cDepthBits = 16; pfd.iLayerType = 0;
+    SetPixelFormat(g_win.hdc, ChoosePixelFormat(g_win.hdc, &pfd), &pfd);
     g_win.hglrc = wglCreateContext(g_win.hdc);
     if (!g_win.hglrc) return false;
     wglMakeCurrent(g_win.hdc, g_win.hglrc);
 
-    g_win.width = w;
-    g_win.height = h;
+    g_win.width = w; g_win.height = h;
     g_win.shouldClose = false;
     return true;
 }
@@ -403,6 +389,7 @@ void renBegin(float w, float h) {
 void renEnd() { glFlush(); }
 
 void renRect(float x, float y, float w, float h, Color c) {
+    glDisable(GL_TEXTURE_2D);
     glColor4f(c.r, c.g, c.b, c.a);
     glBegin(GL_QUADS);
     glVertex2f(x, y);
@@ -424,7 +411,7 @@ void renTexturedQuad(float x, float y, float w, float h, float u0, float v0, flo
 
 void renSetScissor(int x, int y, int w, int h) {
     glEnable(GL_SCISSOR_TEST);
-    glScissor(x, cast(int)(g_ren.screenH - y - h), w, h);
+    glScissor(x, cast(int)(g_ren.screenH - y - h) - 1, w, h + 2);
 }
 
 void renClearScissor() { glDisable(GL_SCISSOR_TEST); }
@@ -538,7 +525,7 @@ struct Rect {
 /* ================================================================== */
 struct ScrollBar {
     Rect bounds;
-    float value, pageSize, totalSize;
+    float value = 0, pageSize = 1, totalSize = 1;
     bool vertical = true, dragging;
     int dragStart;
     float dragStartVal;
@@ -816,7 +803,7 @@ struct TextEditor {
     bool showFind;
     TextInput findInput;
 
-    void init() { buf.init(); findInput.fontId = fontId; findInput.bounds = Rect(0,0,300,24); focused = true; curLine = 0; curCol = 0; showLineNumbers = true; }
+    void init() { buf.init(); findInput.fontId = fontId; findInput.bounds = Rect(0,0,300,24); focused = true; curLine = 0; curCol = 0; showLineNumbers = true; buf.loadUTF8("Hello World\nSecond line", 23); }
     void clear() {
         buf.clear(); curLine=0; curCol=0; selLine=-1; selCol=-1; hasSelection=false;
         scrollX=0; scrollY=0; undoStack.length=0; redoStack.length=0; modified=false;
@@ -988,28 +975,18 @@ struct TextEditor {
                 if (fontId) renDrawText(fontId, bounds.x+4, ly, wn.ptr, nl, Color(0.5f,0.5f,0.55f));
             }
         }
-        glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, g_atlas.texture);
-        float asc = atlasAscent(fontId);
         for (int l=firstLine;l<firstLine+visLines && l<buf.lineCount();l++) {
             float ly = bounds.y + l*c - scrollY;
             float tx = bounds.x + gutterW - scrollX;
             auto lp = buf.linePtr(l); int ll = buf.lineLen(l);
-            for (int i=0;i<ll;i++) {
-                auto g = atlasGetGlyph(fontId, lp[i]);
-                if (g) {
-                    glColor4f(0.9f,0.9f,0.9f,1.0f);
-                    glBegin(GL_QUADS);
-                    glTexCoord2f(g.u0,g.v0); glVertex2f(tx+g.xoff, ly+asc+g.yoff);
-                    glTexCoord2f(g.u1,g.v0); glVertex2f(tx+g.xoff+g.w, ly+asc+g.yoff);
-                    glTexCoord2f(g.u1,g.v1); glVertex2f(tx+g.xoff+g.w, ly+asc+g.yoff+g.h);
-                    glTexCoord2f(g.u0,g.v1); glVertex2f(tx+g.xoff, ly+asc+g.yoff+g.h);
-                    glEnd();
-                    tx += g.advance;
-                }
+            // GC-safe: copy to stack first
+            if (ll > 0 && fontId) {
+                wchar[512] line;
+                int ci = 0;
+                for (int i = 0; i < ll && i < 511; i++) line[ci] = lp[i], ci++;
+                renDrawText(fontId, tx, ly, line.ptr, ci, Color(0.9f,0.9f,0.9f));
             }
         }
-        glDisable(GL_TEXTURE_2D);
         renClearScissor();
         if (focused && cast(int)(cursorBlink*2)%2 == 0) {
             float cx = bounds.x + gutterW + atlasTextAdvance(fontId, buf.linePtr(curLine), curCol) - scrollX;
@@ -1023,7 +1000,7 @@ struct TextEditor {
         vscroll.totalSize = contentH > 0 ? contentH : 1;
         vscroll.pageSize = viewH;
         vscroll.draw();
-        scrollY = vscroll.value * (contentH - viewH);
+        scrollY = contentH > viewH ? vscroll.value * (contentH - viewH) : 0;
         auto sb = Rect(bounds.x, bounds.y+bounds.h-24, bounds.w, 24);
         renRect(sb.x, sb.y, sb.w, sb.h, Color(0.18f,0.18f,0.22f));
         /* build status string manually */
@@ -1236,12 +1213,15 @@ struct Notepad {
     bool running = true, showAbout;
 
     void init() {
-        bodyFont = atlasAddFont("Consolas", 15.0f);
         menuFont = atlasAddFont("Segoe UI", 13.0f);
-        if (!bodyFont) bodyFont = atlasAddFont("Courier New", 15.0f);
         if (!menuFont) menuFont = atlasAddFont("Arial", 13.0f);
-        if (!bodyFont) bodyFont = atlasAddFont("Lucida Console", 15.0f);
         if (!menuFont) menuFont = atlasAddFont("Tahoma", 13.0f);
+        bodyFont = atlasAddFont("Segoe UI", 15.0f);
+        if (!bodyFont) bodyFont = atlasAddFont("Arial", 15.0f);
+        if (!bodyFont) bodyFont = atlasAddFont("Consolas", 15.0f);
+        if (!bodyFont) bodyFont = atlasAddFont("Courier New", 15.0f);
+        if (!bodyFont) bodyFont = menuFont;
+        if (!menuFont) menuFont = bodyFont;
         editor.fontId = bodyFont;
         editor.bounds = Rect(0, 24, g_win.width, g_win.height - 24);
         editor.init();
@@ -1277,7 +1257,49 @@ struct Notepad {
 
     void draw() {
         menubar.draw(0, 0, g_win.width);
-        editor.draw();
+        // Direct GC-safe text rendering
+        float c = editor.ch();
+        renRect(editor.bounds.x, editor.bounds.y, editor.bounds.w, editor.bounds.h, Color(0.12f,0.12f,0.15f));
+        renSetScissor(editor.bounds.x, editor.bounds.y, editor.bounds.w, editor.bounds.h-24);
+        // Gutter + line numbers
+        int gutterW = editor.showLineNumbers ? 50 : 0;
+        renRect(editor.bounds.x, editor.bounds.y, gutterW, editor.bounds.h-24, Color(0.1f,0.1f,0.12f));
+        int firstLine = cast(int)(editor.scrollY / c);
+        int visLines = cast(int)((editor.bounds.h - 24) / c) + 2;
+        int nlines = editor.buf.lineCount();
+        if (firstLine + visLines > nlines) visLines = nlines - firstLine;
+        if (firstLine < 0) firstLine = 0;
+        for (int l = firstLine; l < firstLine+visLines && l < nlines; l++) {
+            float ly = editor.bounds.y + l*c - editor.scrollY;
+            char[8] num; intToDigits(l+1, num.ptr, 8);
+            wchar[8] wn; int nl=0; for (int i=0;num[i]&&i<8;i++) wn[nl++]=cast(wchar)num[i];
+            if (bodyFont) renDrawText(bodyFont, editor.bounds.x+4, ly, wn.ptr, nl, Color(0.5f,0.5f,0.55f));
+            auto lp = editor.buf.linePtr(l); int ll = editor.buf.lineLen(l);
+            if (ll > 0 && bodyFont) {
+                wchar[512] copy; int ci = 0;
+                for (int i = 0; i < ll && i < 511; i++) copy[ci++] = lp[i];
+                renDrawText(bodyFont, editor.bounds.x+gutterW, ly, copy.ptr, ci, Color(0.9f,0.9f,0.9f));
+            }
+        }
+        renClearScissor();
+        // Cursor
+        if (editor.focused && cast(int)(editor.cursorBlink*2)%2 == 0) {
+            float cx = editor.bounds.x + gutterW + atlasTextAdvance(bodyFont, editor.buf.linePtr(editor.curLine), editor.curCol) - editor.scrollX;
+            float cy = editor.bounds.y + editor.curLine*c - editor.scrollY;
+            renRect(cx, cy, 1.5f, c, COL_WHITE);
+        }
+        // Status bar
+        auto sb = Rect(editor.bounds.x, editor.bounds.y+editor.bounds.h-24, editor.bounds.w, 24);
+        renRect(sb.x, sb.y, sb.w, sb.h, Color(0.18f,0.18f,0.22f));
+        char[128] status; int pos = 0;
+        void appendStr(const(char)* s) { while (*s && pos < 126) status[pos++] = *s++; }
+        void appendInt(int v) { char[16] b; intToDigits(v, b.ptr, 16); int i = 0; while (b[i] && pos < 126) status[pos++] = b[i++]; }
+        appendStr("Ln "); appendInt(editor.curLine+1);
+        appendStr(", Col "); appendInt(editor.curCol+1);
+        appendStr("  |  "); appendInt(nlines); appendStr(" lines");
+        status[pos] = 0;
+        wchar[128] ws; int sl=0; for (int i=0;status[i]&&i<127;i++) ws[sl++]=cast(wchar)status[i];
+        if (bodyFont) renDrawText(bodyFont, sb.x+8, sb.y+4, ws.ptr, sl, COL_GRAY);
         if (showAbout) {
             int aw=300,ah=150,ax=(g_win.width-aw)/2,ay=(g_win.height-ah)/2;
             renRect(ax,ay,aw,ah,Color(0.2f,0.2f,0.25f));
