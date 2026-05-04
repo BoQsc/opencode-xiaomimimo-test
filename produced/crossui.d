@@ -816,7 +816,7 @@ struct TextEditor {
     bool showFind;
     TextInput findInput;
 
-    void init() { buf.init(); findInput.fontId = fontId; findInput.bounds = Rect(0,0,300,24); }
+    void init() { buf.init(); findInput.fontId = fontId; findInput.bounds = Rect(0,0,300,24); focused = true; curLine = 0; curCol = 0; showLineNumbers = true; }
     void clear() {
         buf.clear(); curLine=0; curCol=0; selLine=-1; selCol=-1; hasSelection=false;
         scrollX=0; scrollY=0; undoStack.length=0; redoStack.length=0; modified=false;

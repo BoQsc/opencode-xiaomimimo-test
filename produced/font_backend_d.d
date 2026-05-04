@@ -108,7 +108,7 @@ GlyphBitmap fontGlyphBitmap(NativeFont* f, int codepoint) {
         gb.width = cast(int)gm.gmBlackBoxX;
         gb.height = cast(int)gm.gmBlackBoxY;
         gb.xoff = cast(int)gm.gmptGlyphOrigin.x;
-        gb.yoff = cast(int)(gm.gmptGlyphOrigin.y - gm.gmBlackBoxY);
+        gb.yoff = -cast(int)(gm.gmptGlyphOrigin.y);
 
         int rowBytes = (gb.width + 3) & ~3;
         gb.pixels = cast(ubyte*)malloc(gb.width * gb.height);
